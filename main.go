@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 
 	"github.com/pkg/errors"
 
@@ -46,6 +47,33 @@ func compileProgramCwd(buildID string) (string, error) {
 	return outfile, nil
 }
 
+func execProgramCmd(cmd *exec.Cmd, env []string) error {
+	cmd.Env = env
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+
+	err := cmd.Run()
+	if err == nil {
+		// Go program completed successfully
+		return nil
+	}
+
+	// error handling
+	exiterr, ok := err.(*exec.ExitError)
+	if !ok {
+		return errors.Wrapf(exiterr, "command errored unexpectedly")
+	}
+
+	// retrieve the status code
+	status, ok := exiterr.Sys().(syscall.WaitStatus)
+	if !ok {
+		return errors.Wrapf(exiterr, "program exited unexpectedly")
+	}
+
+	// If the program ran, but exited with a non-zero error code. This will happen often, since user
+	// errors will trigger this.  So, the error message should look as nice as possible.
+	return errors.Errorf("program exited with non-zero exit code: %d", status.ExitStatus())
+}
+
 func checkFile(f string) {
 	stat, err := os.Stat(f)
 	if err != nil {
@@ -56,10 +84,22 @@ func checkFile(f string) {
 }
 
 func main() {
+	if os.Getenv("MODE") == "test" {
+		fmt.Printf("TEST\n")
+		return
+	}
+
 	file, err := compileProgramCwd("myproj")
 	fmt.Printf("file = %v\n", file)
 	fmt.Printf("err = %v\n", err)
 	checkFile(file)
+
+	env := os.Environ()
+	env = append(env, "MODE=test")
+
+	fmt.Printf("execProgramCmd() = %v\n",
+		execProgramCmd(exec.Command(file), env))
+
 	fmt.Printf("os.Remove(file) = %v\n", os.Remove(file))
 	checkFile(file)
 }
